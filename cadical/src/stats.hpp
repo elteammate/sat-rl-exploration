@@ -261,6 +261,7 @@ struct Stats {
 
   Stats ();
 
+  void send_out (Internal *internal);
   void print (Internal *);
 };
 

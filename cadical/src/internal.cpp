@@ -27,6 +27,7 @@ Internal::Internal ()
       profiles (this), force_phase_messages (false),
 #endif
       arena (this), prefix ("c "), internal (this), external (0),
+      connection(nullptr),
       termination_forced (false), vars (this->max_var),
       lits (this->max_var) {
   control.push_back (Level (0, 0));
@@ -48,6 +49,7 @@ Internal::Internal ()
 }
 
 Internal::~Internal () {
+  delete connection;
   delete[](char *) dummy_binary;
   for (const auto &c : clauses)
     delete_clause (c);
@@ -940,6 +942,7 @@ void Internal::finalize (int res) {
 
 void Internal::print_statistics () {
   stats.print (this);
+    stats.send_out(this);
   for (auto &st : stat_tracers)
     st->print_stats ();
 }

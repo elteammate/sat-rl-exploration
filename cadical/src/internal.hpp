@@ -55,6 +55,7 @@ extern "C" {
 #include "clause.hpp"
 #include "config.hpp"
 #include "contract.hpp"
+#include "communicate.hpp"
 #include "cover.hpp"
 #include "decompose.hpp"
 #include "drattracer.hpp"
@@ -278,6 +279,8 @@ struct Internal {
 
   Internal *internal; // proxy to 'this' in macros
   External *external; // proxy to 'external' buddy in 'Solver'
+
+  Connection *connection;
 
   /*----------------------------------------------------------------------*/
 

@@ -1,6 +1,7 @@
 // vim: set tw=300: set VIM text width to 300 characters for this file.
 
 #include "internal.hpp"
+#include "stats.hpp"
 
 namespace CaDiCaL {
 
@@ -23,6 +24,185 @@ Stats::Stats () {
   } while (0)
 
 /*------------------------------------------------------------------------*/
+
+void Stats::send_out(Internal *internal) {
+  bool sending = internal->connection && internal->opts.el_pipe_stats;
+  if (!sending) return;
+
+  Stats &stats = internal->stats;
+  
+  int64_t propagations = 0;
+  propagations += stats.propagations.cover;
+  propagations += stats.propagations.probe;
+  propagations += stats.propagations.search;
+  propagations += stats.propagations.transred;
+  propagations += stats.propagations.vivify;
+  propagations += stats.propagations.walk;
+
+  int64_t vivified = stats.vivifysubs + stats.vivifystrs;
+
+  internal->connection->write_string("stats");
+  internal->connection->write_string("blocked"), internal->connection->write_u64(stats.blocked);
+  internal->connection->write_string("blockings"), internal->connection->write_u64(stats.blockings);
+  internal->connection->write_string("blockcands"), internal->connection->write_u64(stats.blockcands);
+  internal->connection->write_string("blockres"), internal->connection->write_u64(stats.blockres);
+  internal->connection->write_string("all.pure"), internal->connection->write_u64(stats.all.pure);
+  internal->connection->write_string("blockpured"), internal->connection->write_u64(stats.blockpured);
+  internal->connection->write_string("chronological"), internal->connection->write_u64(stats.chrono);
+  internal->connection->write_string("compacts"), internal->connection->write_u64(stats.compacts);
+  internal->connection->write_string("conflicts"), internal->connection->write_u64(stats.conflicts);
+  internal->connection->write_string("backtracks"), internal->connection->write_u64(stats.backtracks);
+  internal->connection->write_string("conditioned"), internal->connection->write_u64(stats.conditioned);
+  internal->connection->write_string("conditionings"), internal->connection->write_u64(stats.conditionings);
+  internal->connection->write_string("condcands"), internal->connection->write_u64(stats.condcands);
+  internal->connection->write_string("condassinit"), internal->connection->write_u64(stats.condassinit);
+  internal->connection->write_string("condassrem"), internal->connection->write_u64(stats.condassrem);
+  internal->connection->write_string("condcondinit"), internal->connection->write_u64(stats.condcondinit);
+  internal->connection->write_string("condcondrem"), internal->connection->write_u64(stats.condcondrem);
+  internal->connection->write_string("condautinit"), internal->connection->write_u64(stats.condautinit);
+  internal->connection->write_string("condautrem"), internal->connection->write_u64(stats.condautrem);
+  internal->connection->write_string("condprops"), internal->connection->write_u64(stats.condprops);
+  internal->connection->write_string("cover.total"), internal->connection->write_u64(stats.cover.total);
+  internal->connection->write_string("cover.asymmetric"), internal->connection->write_u64(stats.cover.asymmetric);
+  internal->connection->write_string("cover.blocked"), internal->connection->write_u64(stats.cover.blocked);
+  internal->connection->write_string("cover.count"), internal->connection->write_u64(stats.cover.count);
+  internal->connection->write_string("decisions"), internal->connection->write_u64(stats.decisions);
+  internal->connection->write_string("searched"), internal->connection->write_u64(stats.searched);
+  internal->connection->write_string("all.eliminated"), internal->connection->write_u64(stats.all.eliminated);
+  internal->connection->write_string("elimphases"), internal->connection->write_u64(stats.elimphases);
+  internal->connection->write_string("elimrounds"), internal->connection->write_u64(stats.elimrounds);
+  internal->connection->write_string("elimtried"), internal->connection->write_u64(stats.elimtried);
+  internal->connection->write_string("elimgates"), internal->connection->write_u64(stats.elimgates);
+  internal->connection->write_string("elimequivs"), internal->connection->write_u64(stats.elimequivs);
+  internal->connection->write_string("elimands"), internal->connection->write_u64(stats.elimands);
+  internal->connection->write_string("elimites"), internal->connection->write_u64(stats.elimites);
+  internal->connection->write_string("elimxors"), internal->connection->write_u64(stats.elimxors);
+  internal->connection->write_string("elimsubst"), internal->connection->write_u64(stats.elimsubst);
+  internal->connection->write_string("elimres"), internal->connection->write_u64(stats.elimres);
+  internal->connection->write_string("elimrestried"), internal->connection->write_u64(stats.elimrestried);
+  internal->connection->write_string("all.fixed"), internal->connection->write_u64(stats.all.fixed);
+  internal->connection->write_string("failed"), internal->connection->write_u64(stats.failed);
+  internal->connection->write_string("probefailed"), internal->connection->write_u64(stats.probefailed);
+  internal->connection->write_string("transredunits"), internal->connection->write_u64(stats.transredunits);
+  internal->connection->write_string("probingphases"), internal->connection->write_u64(stats.probingphases);
+  internal->connection->write_string("probesuccess"), internal->connection->write_u64(stats.probesuccess);
+  internal->connection->write_string("probingrounds"), internal->connection->write_u64(stats.probingrounds);
+  internal->connection->write_string("probed"), internal->connection->write_u64(stats.probed);
+  internal->connection->write_string("hbrs"), internal->connection->write_u64(stats.hbrs);
+  internal->connection->write_string("hbrsizes"), internal->connection->write_u64(stats.hbrsizes);
+  internal->connection->write_string("hbreds"), internal->connection->write_u64(stats.hbreds);
+  internal->connection->write_string("hbrsubs"), internal->connection->write_u64(stats.hbrsubs);
+  internal->connection->write_string("units"), internal->connection->write_u64(stats.units);
+  internal->connection->write_string("binaries"), internal->connection->write_u64(stats.binaries);
+  internal->connection->write_string("flush.learned"), internal->connection->write_u64(stats.flush.learned);
+  internal->connection->write_string("flush.hyper"), internal->connection->write_u64(stats.flush.hyper);
+  internal->connection->write_string("flush.count"), internal->connection->write_u64(stats.flush.count);
+  internal->connection->write_string("instantiated"), internal->connection->write_u64(stats.instantiated);
+  internal->connection->write_string("instrounds"), internal->connection->write_u64(stats.instrounds);
+  internal->connection->write_string("learned.clauses"), internal->connection->write_u64(stats.learned.clauses);
+  internal->connection->write_string("bumped"), internal->connection->write_u64(stats.bumped);
+  internal->connection->write_string("recomputed"), internal->connection->write_u64(stats.recomputed);
+  internal->connection->write_string("promoted1"), internal->connection->write_u64(stats.promoted1);
+  internal->connection->write_string("promoted2"), internal->connection->write_u64(stats.promoted2);
+  internal->connection->write_string("improvedglue"), internal->connection->write_u64(stats.improvedglue);
+  internal->connection->write_string("lucky.succeeded"), internal->connection->write_u64(stats.lucky.succeeded);
+  internal->connection->write_string("lucky.constant.zero"), internal->connection->write_u64(stats.lucky.constant.zero);
+  internal->connection->write_string("lucky.constant.one"), internal->connection->write_u64(stats.lucky.constant.one);
+  internal->connection->write_string("lucky.backward.one"), internal->connection->write_u64(stats.lucky.backward.one);
+  internal->connection->write_string("lucky.backward.zero"), internal->connection->write_u64(stats.lucky.backward.zero);
+  internal->connection->write_string("lucky.forward.one"), internal->connection->write_u64(stats.lucky.forward.one);
+  internal->connection->write_string("lucky.forward.zero"), internal->connection->write_u64(stats.lucky.forward.zero);
+  internal->connection->write_string("lucky.horn.positive"), internal->connection->write_u64(stats.lucky.horn.positive);
+  internal->connection->write_string("lucky.horn.negative"), internal->connection->write_u64(stats.lucky.horn.negative);
+  internal->connection->write_string("learned.literals"), internal->connection->write_u64(stats.learned.literals);
+  internal->connection->write_string("minimized"), internal->connection->write_u64(stats.minimized);
+  internal->connection->write_string("shrunken"), internal->connection->write_u64(stats.shrunken);
+  internal->connection->write_string("minishrunken"), internal->connection->write_u64(stats.minishrunken);
+  internal->connection->write_string("otfs.subsumed"), internal->connection->write_u64(stats.otfs.subsumed);
+  internal->connection->write_string("otfs.strengthened"), internal->connection->write_u64(stats.otfs.strengthened);
+  internal->connection->write_string("propagations"), internal->connection->write_u64(propagations);
+  internal->connection->write_string("propagations.cover"), internal->connection->write_u64(stats.propagations.cover);
+  internal->connection->write_string("propagations.probe"), internal->connection->write_u64(stats.propagations.probe);
+  internal->connection->write_string("propagations.search"), internal->connection->write_u64(stats.propagations.search);
+  internal->connection->write_string("propagations.transred"), internal->connection->write_u64(stats.propagations.transred);
+  internal->connection->write_string("propagations.vivify"), internal->connection->write_u64(stats.propagations.vivify);
+  internal->connection->write_string("propagations.walk"), internal->connection->write_u64(stats.propagations.walk);
+  internal->connection->write_string("reactivated"), internal->connection->write_u64(stats.reactivated);
+  internal->connection->write_string("reduced"), internal->connection->write_u64(stats.reduced);
+  internal->connection->write_string("reductions"), internal->connection->write_u64(stats.reductions);
+  internal->connection->write_string("collections"), internal->connection->write_u64(stats.collections);
+  internal->connection->write_string("rephased.total"), internal->connection->write_u64(stats.rephased.total);
+  internal->connection->write_string("rephased.best"), internal->connection->write_u64(stats.rephased.best);
+  internal->connection->write_string("rephased.flipped"), internal->connection->write_u64(stats.rephased.flipped);
+  internal->connection->write_string("rephased.inverted"), internal->connection->write_u64(stats.rephased.inverted);
+  internal->connection->write_string("rephased.original"), internal->connection->write_u64(stats.rephased.original);
+  internal->connection->write_string("rephased.random"), internal->connection->write_u64(stats.rephased.random);
+  internal->connection->write_string("rephased.walk"), internal->connection->write_u64(stats.rephased.walk);
+  internal->connection->write_string("rescored"), internal->connection->write_u64(stats.rescored);
+  internal->connection->write_string("restarts"), internal->connection->write_u64(stats.restarts);
+  internal->connection->write_string("reused"), internal->connection->write_u64(stats.reused);
+  internal->connection->write_string("reusedlevels"), internal->connection->write_u64(stats.reusedlevels);
+  internal->connection->write_string("restored"), internal->connection->write_u64(stats.restored);
+  internal->connection->write_string("restorations"), internal->connection->write_u64(stats.restorations);
+  internal->connection->write_string("restoredlits"), internal->connection->write_u64(stats.restoredlits);
+  internal->connection->write_string("stabphases"), internal->connection->write_u64(stats.stabphases);
+  internal->connection->write_string("restartstable"), internal->connection->write_u64(stats.restartstable);
+  internal->connection->write_string("reusedstable"), internal->connection->write_u64(stats.reusedstable);
+  internal->connection->write_string("all.substituted"), internal->connection->write_u64(stats.all.substituted);
+  internal->connection->write_string("decompositions"), internal->connection->write_u64(stats.decompositions);
+  internal->connection->write_string("subsumed"), internal->connection->write_u64(stats.subsumed);
+  internal->connection->write_string("subsumephases"), internal->connection->write_u64(stats.subsumephases);
+  internal->connection->write_string("subsumerounds"), internal->connection->write_u64(stats.subsumerounds);
+  internal->connection->write_string("deduplicated"), internal->connection->write_u64(stats.deduplicated);
+  internal->connection->write_string("transreds"), internal->connection->write_u64(stats.transreds);
+  internal->connection->write_string("transitive"), internal->connection->write_u64(stats.transitive);
+  internal->connection->write_string("subirr"), internal->connection->write_u64(stats.subirr);
+  internal->connection->write_string("subred"), internal->connection->write_u64(stats.subred);
+  internal->connection->write_string("subtried"), internal->connection->write_u64(stats.subtried);
+  internal->connection->write_string("subchecks"), internal->connection->write_u64(stats.subchecks);
+  internal->connection->write_string("subchecks2"), internal->connection->write_u64(stats.subchecks2);
+  internal->connection->write_string("elimotfsub"), internal->connection->write_u64(stats.elimotfsub);
+  internal->connection->write_string("elimbwsub"), internal->connection->write_u64(stats.elimbwsub);
+  internal->connection->write_string("eagersub"), internal->connection->write_u64(stats.eagersub);
+  internal->connection->write_string("eagertried"), internal->connection->write_u64(stats.eagertried);
+  internal->connection->write_string("strengthened"), internal->connection->write_u64(stats.strengthened);
+  internal->connection->write_string("elimotfstr"), internal->connection->write_u64(stats.elimotfstr);
+  internal->connection->write_string("elimbwstr"), internal->connection->write_u64(stats.elimbwstr);
+  internal->connection->write_string("htrs"), internal->connection->write_u64(stats.htrs);
+  internal->connection->write_string("ternary"), internal->connection->write_u64(stats.ternary);
+  internal->connection->write_string("htrs3"), internal->connection->write_u64(stats.htrs3);
+  internal->connection->write_string("htrs2"), internal->connection->write_u64(stats.htrs2);
+  internal->connection->write_string("ilbsuccess"), internal->connection->write_u64(stats.ilbsuccess);
+  internal->connection->write_string("levelsreused"), internal->connection->write_u64(stats.levelsreused);
+  internal->connection->write_string("literalsreused"), internal->connection->write_u64(stats.literalsreused);
+  internal->connection->write_string("assumptionsreused"), internal->connection->write_u64(stats.assumptionsreused);
+  internal->connection->write_string("vivified"), internal->connection->write_u64(vivified);
+  internal->connection->write_string("vivifications"), internal->connection->write_u64(stats.vivifications);
+  internal->connection->write_string("vivifychecks"), internal->connection->write_u64(stats.vivifychecks);
+  internal->connection->write_string("vivifysched"), internal->connection->write_u64(stats.vivifysched);
+  internal->connection->write_string("vivifyunits"), internal->connection->write_u64(stats.vivifyunits);
+  internal->connection->write_string("vivifyinst"), internal->connection->write_u64(stats.vivifyinst);
+  internal->connection->write_string("vivifysubs"), internal->connection->write_u64(stats.vivifysubs);
+  internal->connection->write_string("vivifystrs"), internal->connection->write_u64(stats.vivifystrs);
+  internal->connection->write_string("vivifystrirr"), internal->connection->write_u64(stats.vivifystrirr);
+  internal->connection->write_string("vivifystred1"), internal->connection->write_u64(stats.vivifystred1);
+  internal->connection->write_string("vivifystred2"), internal->connection->write_u64(stats.vivifystred2);
+  internal->connection->write_string("vivifystred3"), internal->connection->write_u64(stats.vivifystred3);
+  internal->connection->write_string("vivifydecs"), internal->connection->write_u64(stats.vivifydecs);
+  internal->connection->write_string("vivifyreused"), internal->connection->write_u64(stats.vivifyreused);
+  internal->connection->write_string("walk.count"), internal->connection->write_u64(stats.walk.count);
+  internal->connection->write_string("walk.flips"), internal->connection->write_u64(stats.walk.flips);
+  internal->connection->write_string("walk.minimum"), internal->connection->write_u64(stats.walk.minimum);
+  internal->connection->write_string("walk.broken"), internal->connection->write_u64(stats.walk.broken);
+  internal->connection->write_string("weakened"), internal->connection->write_u64(stats.weakened);
+  internal->connection->write_string("extensions"), internal->connection->write_u64(stats.extensions);
+  internal->connection->write_string("extended"), internal->connection->write_u64(stats.extended);
+  double t = internal->solve_time();
+  internal->connection->write_string("time"), internal->connection->write_f64(t);
+  internal->connection->write_string("end");
+
+  internal->connection->wait_for_ok();
+}
 
 void Stats::print (Internal *internal) {
 

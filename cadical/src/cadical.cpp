@@ -381,6 +381,8 @@ int App::main (int argc, char **argv) {
   bool witness = true, less = false, status = true;
   const char *dimacs_name, *err;
 
+  FILE *pipe_in = 0, *pipe_out = 0;
+
   for (int i = 1; i < argc; i++) {
     if (!strcmp (argv[i], "-h") || !strcmp (argv[i], "--help") ||
         !strcmp (argv[i], "--build") || !strcmp (argv[i], "--version") ||
@@ -393,6 +395,18 @@ int App::main (int argc, char **argv) {
         dimacs_specified = true;
       else
         proof_specified = true;
+    } else if (!strcmp(argv[i], "--pipe-out")) {
+      if (++i == argc) 
+        APPERR ("argument to '--pipe-out' missing");
+      pipe_out = fopen(argv[i], "wb");
+      if (!pipe_out)
+        APPERR ("failed to open pipe-out file '%s'", argv[i]);
+    } else if (!strcmp(argv[i], "--pipe-in")) {
+      if (++i == argc) 
+        APPERR ("argument to '--pipe-in' missing");
+      pipe_in = fopen(argv[i], "rb");
+      if (!pipe_in)
+        APPERR ("failed to open pipe-in file '%s'", argv[i]);
     } else if (!strcmp (argv[i], "-r")) {
       if (++i == argc)
         APPERR ("argument to '-r' missing");
@@ -570,6 +584,10 @@ int App::main (int argc, char **argv) {
         APPERR ("DRAT proof file '%s' not writable", proof_path);
     } else
       dimacs_specified = true, dimacs_path = argv[i];
+  }
+
+  if (pipe_in && pipe_out) {
+      solver->internal->connection = new Connection(pipe_in, pipe_out);
   }
 
   /*----------------------------------------------------------------------*/
