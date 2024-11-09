@@ -65,7 +65,6 @@ OPTION( decomposerounds,   2,  1, 16,1,0,1, "number of decompose rounds") \
 OPTION( deduplicate,       1,  0,  1,0,1,1, "remove duplicated binaries") \
 OPTION( eagersubsume,      1,  0,  1,0,0,1, "subsume recently learned") \
 OPTION( eagersubsumelim,  20,  1,1e3,0,0,1, "limit on subsumed candidates") \
-OPTION( el_pipe_stats,     0,  0,  1,0,0,0, "[*] write solver statistics to pipe out") \
 OPTION( elim,              1,  0,  1,0,1,1, "bounded variable elimination") \
 OPTION( elimands,          1,  0,  1,0,0,1, "find AND gates") \
 OPTION( elimaxeff,       2e9,  0,2e9,1,0,1, "maximum elimination efficiency") \

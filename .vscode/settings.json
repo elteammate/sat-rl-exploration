@@ -5,6 +5,8 @@
         "istream": "cpp",
         "sstream": "cpp",
         "streambuf": "cpp",
-        "iosfwd": "cpp"
+        "iosfwd": "cpp",
+        "cstdint": "cpp",
+        "string": "cpp"
     }
 }

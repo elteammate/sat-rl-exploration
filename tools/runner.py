@@ -6,41 +6,49 @@ import asyncio
 
 
 class Connection:
-    def __init__(self, fifo_p2s: Path, fifo_s2p: Path, delete_on_close: bool = False):
-        self.fifo_p2s = fifo_p2s
-        self.fifo_s2p = fifo_s2p
-        self.delete_on_close = delete_on_close
+    def __init__(self, addr: Path):
+        self.addr = addr
+        self.s2p: asyncio.StreamReader = None
+        self.p2s: asyncio.StreamWriter = None
+        self.ready = asyncio.Event()
 
-    def __enter__(self):
-        self.p2s = open(self.fifo_p2s, "rb")
-        os.set_blocking(self.p2s.fileno(), False)
-        self.s2p = open(self.fifo_s2p, "wb")
-        os.set_blocking(self.s2p.fileno(), False)
-        return self
+    async def start(self):
+        if self.addr.exists():
+            self.addr.unlink()
 
-    def __exit__(self, exc_type, exc, tb):
-        self.p2s.close()
-        self.s2p.close()
-        if self.delete_on_close:
-            self.fifo_p2s.unlink()
-            self.fifo_s2p.unlink()
+        client_connected = asyncio.Event()
+
+        async def _handle_connection(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+            if self.s2p:
+                raise ValueError("Connection already established")
+            self.s2p = reader
+            self.p2s = writer
+            client_connected.set()
+
+        self.server = await asyncio.start_unix_server(_handle_connection, path=str(self.addr))
+        self.ready.set()
+
+        self.serving_task = asyncio.create_task(self.server.serve_forever())
+        await client_connected.wait()
+
+    async def close(self):
+        if self.p2s:
+            self.p2s.close()
+            await self.p2s.wait_closed()
+
+        if self.addr.exists():
+            self.addr.unlink()
+
+        self.serving_task.cancel()
 
     async def read(self, n: int) -> bytes:
-        data = b""
-        while len(data) < n:
-            data += self.p2s.read(n - len(data))
-            print(f"Read {data}")
-            await asyncio.sleep(0)
-        return data
+        return await self.s2p.readexactly(n)
 
     async def write(self, data: bytes):
-        written = 0
-        while written < len(data):
-            written += self.s2p.write(data[written:])
-            await asyncio.sleep(0)
+        self.p2s.write(data)
 
-    def flush(self):
-        self.s2p.flush()
+    async def flush(self):
+        await self.p2s.drain()
 
     async def read_u8(self) -> int:
         return struct.unpack("B", await self.read(1))[0]
@@ -77,7 +85,7 @@ class Connection:
 
     async def read_str(self) -> str:
         n = await self.read_u32()
-        return (await self.read(n)).decode("utf-8")
+        return await self.read_str_raw(n)
 
     async def write_u8(self, n: int):
         await self.write(struct.pack("B", n))
@@ -135,51 +143,52 @@ async def handle_pipe(
     connection: Connection,
     routes: dict[str, callable],
 ):
-    with connection:
-        while True:
-            request_len = await connection.read_u32()
-            if request_len == 0:
-                raise ValueError("Got empty request through pipe")
-            if request_len > 32:
-                raise ValueError("Request is too long")
-            request = await connection.read_str_raw(request_len)
-            if request not in routes:
-                raise KeyError(f"Got unknown request through pipe: {request}")
+    await connection.start()
 
-            fn = routes[request]
-            if asyncio.iscoroutinefunction(fn):
-                await fn(connection)
-            else:
-                fn(connection)
-            await connection.flush()
+    while True:
+        request = await connection.read_str()
+        if request not in routes:
+            raise KeyError(f"Got unknown request through pipe: {request}")
+
+        fn = routes[request]
+        if asyncio.iscoroutinefunction(fn):
+            await fn(connection)
+        else:
+            fn(connection)
+        await connection.flush()
 
 
 async def run_instance(
     solver: Path,
+    args: list[str],
     cnf_path: Path, *,
+    silent: bool = True,
     timeout_seconds: int | None = None,
     routes: dict[str, callable],
 ):
     assert solver.exists(), f"{solver} does not exist"
     assert cnf_path.exists(), f"{cnf_path} does not exist"
 
-    fifo_s2p = Path(f"/tmp/{uuid.uuid4()}.fifo")
-    fifo_p2s = Path(f"/tmp/{uuid.uuid4()}.fifo")
-    os.mkfifo(fifo_s2p)
-    os.mkfifo(fifo_p2s)
+    socket_path = Path(f"/tmp/{uuid.uuid4()}.sock")
 
-    connection = Connection(fifo_p2s, fifo_s2p, delete_on_close=True)
+    connection = Connection(socket_path)
+    task = asyncio.create_task(handle_pipe(connection, routes))
 
     args = [
         str(solver.absolute()),
-        "--pipe-in", str(fifo_p2s.absolute()),
-        "--pipe-out", str(fifo_s2p.absolute()),
+        *args,
+        "--socket", str(socket_path.absolute()),
         "-t", str(timeout_seconds) if timeout_seconds else "0",
         str(cnf_path.absolute()),
     ]
+    print(*args)
 
-    process = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-    task = asyncio.create_task(handle_pipe(connection, routes))
+    await connection.ready.wait()
+    process = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.DEVNULL if silent else None,
+        stderr=asyncio.subprocess.DEVNULL if silent else None,
+    )
     # print(f"Solver finished with {await process.wait()}")
 
     try:
@@ -190,3 +199,4 @@ async def run_instance(
         await process.wait()
     finally:
         task.cancel()
+        await connection.close()

@@ -1,4 +1,7 @@
 AlignEscapedNewlines: DontAlign
 ColumnLimit: 76
-SpaceBeforeParens: Always
+SpaceBeforeParens: Never
 SpaceAfterCStyleCast: true
+TabWidth: 2
+IndentWidth: 2
+ContinuationIndentWidth: 2

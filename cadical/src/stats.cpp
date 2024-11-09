@@ -26,7 +26,7 @@ Stats::Stats () {
 /*------------------------------------------------------------------------*/
 
 void Stats::send_out(Internal *internal) {
-  bool sending = internal->connection && internal->opts.el_pipe_stats;
+  bool sending = internal->connection != 0;
   if (!sending) return;
 
   Stats &stats = internal->stats;
