@@ -1,9 +1,14 @@
 #include <cassert>
 #include <communicate.hpp>
+#include "internal.hpp"
 
-
+namespace CaDiCaL {
 void Connection::wait_for_ok() {
-  assert(read_string() == "ok" && "Expected to read ok from connection");
+  auto message = read_string();
+  if (message != "ok") {
+    std::cerr << "Expected to read ok from connection, but got " << message << std::endl;
+    exit(1);
+  }
 }
 
 Connection::Connection(const char *address) {
@@ -23,4 +28,16 @@ Connection::Connection(const char *address) {
     std::cerr << "Failed to connect to socket\n" << errno << std::endl;
     exit(1);
   }
+}
+
+Connection &Connection::write_clause(const Clause &c) {
+  write_u64(c.id);
+  write_u32(c.size);
+  for(auto l : c) {
+    write_i32(l);
+  }
+
+  return *this;
+}
+
 }

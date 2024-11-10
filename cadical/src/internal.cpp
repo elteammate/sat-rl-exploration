@@ -28,6 +28,7 @@ Internal::Internal ()
 #endif
       arena (this), prefix ("c "), internal (this), external (0),
       connection(nullptr),
+      reduce_mode(0),
       termination_forced (false), vars (this->max_var),
       lits (this->max_var) {
   control.push_back (Level (0, 0));

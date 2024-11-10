@@ -3,6 +3,17 @@ import struct
 import os
 import uuid
 import asyncio
+import dataclasses
+import contextlib
+from primitives import *
+
+
+@dataclasses.dataclass(frozen=True)
+class RunInfo:
+    solver: Path
+    args: list[str]
+    cnf_path: Path
+    run_id: uuid.UUID 
 
 
 class Connection:
@@ -11,6 +22,7 @@ class Connection:
         self.s2p: asyncio.StreamReader = None
         self.p2s: asyncio.StreamWriter = None
         self.ready = asyncio.Event()
+        self.num_reads = 0
 
     async def start(self):
         if self.addr.exists():
@@ -34,7 +46,10 @@ class Connection:
     async def close(self):
         if self.p2s:
             self.p2s.close()
-            await self.p2s.wait_closed()
+            try:
+                await self.p2s.wait_closed()
+            except BrokenPipeError:
+                pass
 
         if self.addr.exists():
             self.addr.unlink()
@@ -42,6 +57,8 @@ class Connection:
         self.serving_task.cancel()
 
     async def read(self, n: int) -> bytes:
+        self.num_reads += 1
+        # print(f"called read {self.num_reads}")
         return await self.s2p.readexactly(n)
 
     async def write(self, data: bytes):
@@ -79,6 +96,12 @@ class Connection:
 
     async def read_f64(self) -> float:
         return struct.unpack("d", await self.read(8))[0]
+
+    async def read_clause(self) -> Clause:
+        id_ = await self.read_u64()
+        size = await self.read_u32()
+        lits = [await self.read_i32() for _ in range(size)]
+        return Clause(id_, lits)
 
     async def read_str_raw(self, n: int) -> str:
         return (await self.read(n)).decode("utf-8")
@@ -142,6 +165,8 @@ class Router:
 async def handle_pipe(
     connection: Connection,
     routes: dict[str, callable],
+    run_info: RunInfo,
+    data: any,
 ):
     await connection.start()
 
@@ -152,51 +177,63 @@ async def handle_pipe(
 
         fn = routes[request]
         if asyncio.iscoroutinefunction(fn):
-            await fn(connection)
+            await fn(connection, run_info, data)
         else:
-            fn(connection)
+            fn(connection, run_info, data)
         await connection.flush()
 
 
 async def run_instance(
     solver: Path,
     args: list[str],
-    cnf_path: Path, *,
+    cnf_path: Path, 
+    routes: dict[str, callable],
+    *,
     silent: bool = True,
     timeout_seconds: int | None = None,
-    routes: dict[str, callable],
+    data: any = None,
+    semaphore: asyncio.Semaphore = None,
 ):
-    assert solver.exists(), f"{solver} does not exist"
-    assert cnf_path.exists(), f"{cnf_path} does not exist"
+    with semaphore if semaphore else contextlib.nullcontext():
+        assert solver.exists(), f"{solver} does not exist"
+        assert cnf_path.exists(), f"{cnf_path} does not exist"
 
-    socket_path = Path(f"/tmp/{uuid.uuid4()}.sock")
+        socket_path = Path(f"/tmp/{uuid.uuid4()}.sock")
 
-    connection = Connection(socket_path)
-    task = asyncio.create_task(handle_pipe(connection, routes))
+        run_info = RunInfo(
+            solver=solver,
+            args=args,
+            cnf_path=cnf_path,
+            run_id=uuid.uuid4(),
+        )
 
-    args = [
-        str(solver.absolute()),
-        *args,
-        "--socket", str(socket_path.absolute()),
-        "-t", str(timeout_seconds) if timeout_seconds else "0",
-        str(cnf_path.absolute()),
-    ]
-    print(*args)
+        connection = Connection(socket_path)
+        task = asyncio.create_task(handle_pipe(connection, routes, run_info, data))
 
-    await connection.ready.wait()
-    process = await asyncio.create_subprocess_exec(
-        *args,
-        stdout=asyncio.subprocess.DEVNULL if silent else None,
-        stderr=asyncio.subprocess.DEVNULL if silent else None,
-    )
-    # print(f"Solver finished with {await process.wait()}")
+        args = [
+            str(solver.absolute()),
+            *args,
+            "--socket", str(socket_path.absolute()),
+            "-t", str(timeout_seconds) if timeout_seconds else "0",
+            str(cnf_path.absolute()),
+        ]
+        print(*args)
 
-    try:
-        await asyncio.wait_for(process.communicate(), timeout=timeout_seconds + 1)
-    except asyncio.TimeoutError:
-        print(f"Solver {solver} timed out and has not terminated. Killing it.")
-        process.terminate()
-        await process.wait()
-    finally:
-        task.cancel()
-        await connection.close()
+        await connection.ready.wait()
+        process = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.DEVNULL if silent else None,
+            stderr=asyncio.subprocess.DEVNULL if silent else None,
+        )
+
+        try:
+            await asyncio.wait_for(process.communicate(), timeout=timeout_seconds + 1 if timeout_seconds else None)
+        except asyncio.TimeoutError:
+            print(f"Solver {solver} timed out and has not terminated. Killing it.")
+            process.terminate()
+            await process.wait()
+        finally:
+            task.cancel()
+            await connection.close()
+
+        return run_info, True if process.returncode == 10 else False if process.returncode == 20 else None

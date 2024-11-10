@@ -81,6 +81,26 @@ struct reduce_less_useful {
 // which redundant clauses are considered not useful and thus will be
 // collected in a subsequent garbage collection phase.
 
+struct reduce_random{
+  static uint64_t ts;
+
+  static uint64_t hash(uint64_t x) {
+    x ^= x >> 30;
+    x *= 0xbf58476d1ce4e5b9;
+    x += ts * 0x94d049bb133111eb;
+    x ^= x >> 27;
+    x *= 0x94d049bb133111eb;
+    x ^= x >> 31;
+    return x;
+  }
+
+  bool operator() (const Clause *c, const Clause *d) const {
+    return hash(c->id) < hash(d->id);
+  }
+};
+
+uint64_t reduce_random::ts = 0;
+
 void Internal::mark_useless_redundant_clauses_as_garbage () {
 
   // We use a separate stack for sorting candidates for removal.  This uses
@@ -103,21 +123,29 @@ void Internal::mark_useless_redundant_clauses_as_garbage () {
     const unsigned used = c->used;
     if (used)
       c->used--;
-    if (c->hyper) {          // Hyper binary and ternary resolvents
-      assert (c->size <= 3); // are only kept for one reduce round
-      if (!used)
-        mark_garbage (c); // (even if 'c->keep' is true) unless
-      continue;           //  used recently.
-    }
-    if (used)
-      continue; // Do keep recently used clauses.
-    if (c->keep)
-      continue; // Forced to keep (see above).
 
-    stack.push_back (c);
+    if (reduce_mode == 0) {
+      if(c->hyper) {          // Hyper binary and ternary resolvents
+        assert(c->size <= 3); // are only kept for one reduce round
+        if(!used)
+          mark_garbage(c); // (even if 'c->keep' is true) unless
+        continue;          //  used recently.
+      }
+      if(used)
+        continue; // Do keep recently used clauses.
+      if(c->keep)
+        continue; // Forced to keep (see above).
+    }
+
+    stack.push_back(c);
   }
 
-  stable_sort (stack.begin (), stack.end (), reduce_less_useful ());
+  if(reduce_mode != 1) {
+    stable_sort(stack.begin(), stack.end(), reduce_less_useful());
+  } else {
+    reduce_random::ts++;
+    stable_sort(stack.begin(), stack.end(), reduce_random());
+  }
 
   size_t target = 1e-2 * opts.reducetarget * stack.size ();
 
@@ -131,25 +159,41 @@ void Internal::mark_useless_redundant_clauses_as_garbage () {
   PHASE ("reduce", stats.reductions, "reducing %zd clauses %.0f%%", target,
          percent (target, stats.current.redundant));
 
-  auto i = stack.begin ();
-  const auto t = i + target;
-  while (i != t) {
-    Clause *c = *i++;
-    LOG (c, "marking useless to be collected");
-    mark_garbage (c);
-    stats.reduced++;
-  }
+  if (reduce_mode == 0 || reduce_mode == 1) {
+    auto i = stack.begin();
+    const auto t = i + target;
+    while(i != t) {
+      Clause *c = *i++;
+      LOG(c, "marking useless to be collected");
+      mark_garbage(c);
+      stats.reduced++;
+    }
 
-  lim.keptsize = lim.keptglue = 0;
+    lim.keptsize = lim.keptglue = 0;
 
-  const auto end = stack.end ();
-  for (i = t; i != end; i++) {
-    Clause *c = *i;
-    LOG (c, "keeping");
-    if (c->size > lim.keptsize)
-      lim.keptsize = c->size;
-    if (c->glue > lim.keptglue)
-      lim.keptglue = c->glue;
+    const auto end = stack.end();
+    for(i = t; i != end; i++) {
+      Clause *c = *i;
+      LOG(c, "keeping");
+      if(c->size > lim.keptsize)
+        lim.keptsize = c->size;
+      if(c->glue > lim.keptglue)
+        lim.keptglue = c->glue;
+    }
+  } else if (reduce_mode == 2) {
+    connection->write_string("reduce");
+    connection->write_u64(stats.current.total);
+    for (auto &c : clauses) {
+      if (c->garbage)
+        continue;
+      connection->write_clause(*c);
+    }
+    connection->write_u64(stack.size());
+    connection->write_u64(target);
+    for(auto &c : stack) {
+      connection->write_u64(c->id);
+    }
+    connection->wait_for_ok();
   }
 
   erase_vector (stack);

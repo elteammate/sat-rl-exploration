@@ -281,6 +281,7 @@ struct Internal {
   External *external; // proxy to 'external' buddy in 'Solver'
 
   Connection *connection;
+  int reduce_mode;
 
   /*----------------------------------------------------------------------*/
 

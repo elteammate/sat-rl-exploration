@@ -9,6 +9,9 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+namespace CaDiCaL {
+struct Clause;
+
 struct Connection {
   static constexpr size_t BUFFER_SIZE = 1 << 16;
 
@@ -16,11 +19,10 @@ struct Connection {
 
   explicit Connection(const char *address);
 
-  template <typename T>
-  T read() {
+  template <typename T> T read() {
     T value;
     ssize_t bytes_read = recv(socket_fd, &value, sizeof(T), 0);
-    if (bytes_read != sizeof(T)) {
+    if(bytes_read != sizeof(T)) {
       std::cerr << "Failed to read value from connection\n";
       exit(1);
     }
@@ -41,7 +43,7 @@ struct Connection {
   [[nodiscard]] std::string read_raw_string(uint32_t length) const {
     std::string value(length, '\0');
     ssize_t bytes_read = recv(socket_fd, &value[0], length, 0);
-    if (bytes_read != length) {
+    if(bytes_read != length) {
       std::cerr << "Failed to read string from connection\n";
       exit(1);
     }
@@ -53,10 +55,9 @@ struct Connection {
     return read_raw_string(length);
   }
 
-  template <typename T>
-  Connection &write(const T &value) {
+  template <typename T> Connection &write(const T &value) {
     ssize_t bytes_written = send(socket_fd, &value, sizeof(T), 0);
-    if (bytes_written != sizeof(T)) {
+    if(bytes_written != sizeof(T)) {
       std::cerr << "Failed to write value to connection\n";
       exit(1);
     }
@@ -76,7 +77,7 @@ struct Connection {
 
   Connection &write_raw_string(const std::string &value) {
     ssize_t bytes_written = send(socket_fd, value.c_str(), value.size(), 0);
-    if (bytes_written != value.size()) {
+    if(bytes_written != ssize_t(value.size())) {
       std::cerr << "Failed to write string to connection\n";
       exit(1);
     }
@@ -88,8 +89,9 @@ struct Connection {
     return write_raw_string(value);
   }
 
-  void flush() {
-  }
+  Connection &write_clause(const Clause &c);
+
+  void flush() {}
 
   void wait_for_ok();
 
@@ -99,3 +101,4 @@ struct Connection {
       ::close(socket_fd);
   }
 };
+}

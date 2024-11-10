@@ -255,7 +255,10 @@ void App::print_usage (bool all) {
   }
 
   printf("\nelt's features:\n"
-         "--socket <path>  Connect to a unix socket at the given path\n");
+         "--socket <path>  Connect to a unix socket at the given path\n"
+         "--reduce-mode <mode> How to reduce: 0 = default, 1 = random, "
+         "                          2 = ask socket\n"
+         );
 }
 
 /*------------------------------------------------------------------------*/
@@ -405,6 +408,11 @@ int App::main (int argc, char **argv) {
                 socket_path, argv[i]);
       else
         socket_path = argv[i];
+    } else if (!strcmp(argv[i], "--reduce-mode")) {
+      if (++i == argc)
+        APPERR ("argument to '--reduce-mode' missing");
+      else
+        solver->internal->reduce_mode = stoi(argv[i]);
     } else if (!strcmp (argv[i], "-r")) {
       if (++i == argc)
         APPERR ("argument to '-r' missing");
