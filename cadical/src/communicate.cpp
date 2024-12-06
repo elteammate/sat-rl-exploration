@@ -32,6 +32,12 @@ Connection::Connection(const char *address) {
 
 Connection &Connection::write_clause(const Clause &c) {
   write_u64(c.id);
+  uint64_t flags = 0;
+  if (c.redundant) flags |= 1;
+  if (c.keep) flags |= 2;
+  if (c.used == 2) flags |= 4;
+  write_u64(flags);
+  write_i32(c.glue);
   write_u32(c.size);
   for(auto l : c) {
     write_i32(l);

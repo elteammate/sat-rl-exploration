@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <vector>
 #include <string>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -74,6 +75,12 @@ struct Connection {
   Connection &write_i64(int64_t value) { return write<int64_t>(value); }
   Connection &write_f32(float value) { return write<float>(value); }
   Connection &write_f64(double value) { return write<double>(value); }
+  Connection &write_vec_i32(const std::vector<int32_t> &value) {
+    write_u32(value.size());
+    for(int32_t v : value)
+      write_i32(v);
+    return *this;
+  }
 
   Connection &write_raw_string(const std::string &value) {
     ssize_t bytes_written = send(socket_fd, value.c_str(), value.size(), 0);

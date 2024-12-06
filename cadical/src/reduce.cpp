@@ -124,18 +124,16 @@ void Internal::mark_useless_redundant_clauses_as_garbage () {
     if (used)
       c->used--;
 
-    if (reduce_mode == 0) {
-      if(c->hyper) {          // Hyper binary and ternary resolvents
-        assert(c->size <= 3); // are only kept for one reduce round
-        if(!used)
-          mark_garbage(c); // (even if 'c->keep' is true) unless
-        continue;          //  used recently.
-      }
-      if(used)
-        continue; // Do keep recently used clauses.
-      if(c->keep)
-        continue; // Forced to keep (see above).
+    if(c->hyper) {          // Hyper binary and ternary resolvents
+      assert(c->size <= 3); // are only kept for one reduce round
+      if(!used)
+        mark_garbage(c); // (even if 'c->keep' is true) unless
+      continue;          //  used recently.
     }
+    if(used)
+      continue; // Do keep recently used clauses.
+    if(c->keep)
+      continue; // Forced to keep (see above).
 
     stack.push_back(c);
   }
@@ -158,6 +156,10 @@ void Internal::mark_useless_redundant_clauses_as_garbage () {
 
   PHASE ("reduce", stats.reductions, "reducing %zd clauses %.0f%%", target,
          percent (target, stats.current.redundant));
+
+  if (target == 0) {
+    return;
+  }
 
   if (reduce_mode == 0 || reduce_mode == 1) {
     auto i = stack.begin();
@@ -182,6 +184,12 @@ void Internal::mark_useless_redundant_clauses_as_garbage () {
     }
   } else if (reduce_mode == 2) {
     connection->write_string("reduce");
+    connection->write_u64(stats.vars);
+    for (int i = 1; i <= stats.vars; i++) {
+      connection->write_i8(val(i));
+      connection->write_i32(var(i).level);
+    }
+
     connection->write_u64(stats.current.total);
     for (auto &c : clauses) {
       if (c->garbage)
@@ -193,7 +201,21 @@ void Internal::mark_useless_redundant_clauses_as_garbage () {
     for(auto &c : stack) {
       connection->write_u64(c->id);
     }
+    connection->write_u64(stats.conflicts);
     connection->wait_for_ok();
+
+    int num_remove = connection->read_u32();
+    std::vector<uint64_t> to_remove(num_remove);
+    for (int i = 0; i < num_remove; i++) {
+      to_remove[i] = connection->read_u64();
+    }
+    std::sort(to_remove.begin(), to_remove.end());
+    for (auto &c : stack) {
+      if (std::binary_search(to_remove.begin(), to_remove.end(), c->id)) {
+        mark_garbage(c);
+        stats.reduced++;
+      }
+    }
   }
 
   erase_vector (stack);

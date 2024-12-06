@@ -6,7 +6,9 @@ import asyncio
 import dataclasses
 import contextlib
 from primitives import *
+import logging
 
+logger = logging.getLogger("runner")
 
 @dataclasses.dataclass(frozen=True)
 class RunInfo:
@@ -25,6 +27,7 @@ class Connection:
         self.num_reads = 0
 
     async def start(self):
+        logger.debug("Starting connection to %s", str(self.addr))
         if self.addr.exists():
             self.addr.unlink()
 
@@ -35,9 +38,11 @@ class Connection:
                 raise ValueError("Connection already established")
             self.s2p = reader
             self.p2s = writer
+            logger.debug("Connection established")
             client_connected.set()
 
         self.server = await asyncio.start_unix_server(_handle_connection, path=str(self.addr))
+        logger.debug("Server started")
         self.ready.set()
 
         self.serving_task = asyncio.create_task(self.server.serve_forever())
@@ -78,7 +83,7 @@ class Connection:
 
     async def read_u64(self) -> int:
         return struct.unpack("Q", await self.read(8))[0]
-
+    
     async def read_i8(self) -> int:
         return struct.unpack("b", await self.read(1))[0]
 
@@ -99,9 +104,22 @@ class Connection:
 
     async def read_clause(self) -> Clause:
         id_ = await self.read_u64()
+        flags = await self.read_u64()
+        lbd = await self.read_i32()
         size = await self.read_u32()
         lits = [await self.read_i32() for _ in range(size)]
-        return Clause(id_, lits)
+        return Clause(
+            id_,
+            lits,
+            redundant=bool(flags & 1),
+            keep=bool(flags & 2),
+            used_recently=bool(flags & 4),
+            lbd=lbd,
+        )
+    
+    async def read_vec_i32(self) -> list[int]:
+        n = await self.read_u32()
+        return [await self.read_i32() for _ in range(n)]
 
     async def read_str_raw(self, n: int) -> str:
         return (await self.read(n)).decode("utf-8")
@@ -193,10 +211,13 @@ async def run_instance(
     timeout_seconds: int | None = None,
     data: any = None,
     semaphore: asyncio.Semaphore = None,
+    valgrind: bool = False,
 ):
-    with semaphore if semaphore else contextlib.nullcontext():
+    async with semaphore if semaphore else contextlib.nullcontext():
         assert solver.exists(), f"{solver} does not exist"
         assert cnf_path.exists(), f"{cnf_path} does not exist"
+
+        logger.info("Running %s on %s", solver, cnf_path)
 
         socket_path = Path(f"/tmp/{uuid.uuid4()}.sock")
 
@@ -217,7 +238,11 @@ async def run_instance(
             "-t", str(timeout_seconds) if timeout_seconds else "0",
             str(cnf_path.absolute()),
         ]
-        print(*args)
+
+        if valgrind:
+            args = ["valgrind"] + args
+
+        logger.info("Running %s", " ".join(args))
 
         await connection.ready.wait()
         process = await asyncio.create_subprocess_exec(
