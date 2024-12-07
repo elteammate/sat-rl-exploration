@@ -235,7 +235,7 @@ async def run_instance(
             str(solver.absolute()),
             *args,
             "--socket", str(socket_path.absolute()),
-            "-t", str(timeout_seconds) if timeout_seconds else "0",
+            "-t", str(timeout_seconds) if timeout_seconds else str(10 ** 9),
             str(cnf_path.absolute()),
         ]
 
