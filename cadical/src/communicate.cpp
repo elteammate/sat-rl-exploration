@@ -42,6 +42,9 @@ Connection &Connection::write_clause(const Clause &c) {
   for(auto l : c) {
     write_i32(l);
   }
+  write_f32(c.activity);
+  write_f32(c.conflicts_on_creation);
+  write_u32(c.times_reason);
 
   return *this;
 }

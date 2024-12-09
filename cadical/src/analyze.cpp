@@ -225,6 +225,12 @@ int Internal::recompute_glue (Clause *c) {
 inline void Internal::bump_clause (Clause *c) {
   LOG (c, "bumping");
   unsigned used = c->used;
+  c->times_reason += 1;
+  c->activity *= 1.1;
+  if (c->activity > 1e10) {
+    for (auto &d : clauses)
+      d->activity *= 1e-10;
+  }
   c->used = 1;
   if (c->keep)
     return;

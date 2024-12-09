@@ -8,6 +8,7 @@ import contextlib
 from primitives import *
 import logging
 import socket
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -95,10 +96,14 @@ class Connection:
         return struct.unpack("q", self.read(8))[0]
 
     def read_f32(self) -> float:
-        return struct.unpack("f", self.read(4))[0]
+        result = struct.unpack("f", self.read(4))[0]
+        assert not math.isnan(result)
+        return result
 
     def read_f64(self) -> float:
-        return struct.unpack("d", self.read(8))[0]
+        result = struct.unpack("d", self.read(8))[0]
+        assert not math.isnan(result)
+        return result
 
     def read_clause(self) -> Clause:
         id_ = self.read_u64()
@@ -106,6 +111,9 @@ class Connection:
         lbd = self.read_i32()
         size = self.read_u32()
         lits = [self.read_i32() for _ in range(size)]
+        activity = self.read_f32()
+        conflicts_on_creation = self.read_f32()
+        times_reason = self.read_u32()
         return Clause(
             id_,
             lits,
@@ -113,8 +121,11 @@ class Connection:
             keep=bool(flags & 2),
             used_recently=bool(flags & 4),
             lbd=lbd,
+            activity=activity,
+            conflicts_on_creation=conflicts_on_creation,
+            times_reason=times_reason,
         )
-    
+
     def read_vec_i32(self) -> list[int]:
         n = self.read_u32()
         return [self.read_i32() for _ in range(n)]

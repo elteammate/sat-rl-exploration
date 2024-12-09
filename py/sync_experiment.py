@@ -1,4 +1,5 @@
 from srunner import *
+import pickle
 from pathlib import Path
 
 cnfs = map(Path, [
@@ -29,10 +30,16 @@ class ReductionProblem:
     vals: list[int]
     clauses: list[list[Clause]]
     reducible_ids: list[int]
+    conflicts: int
+
+
+first_time = True
 
 
 @router.route("reduce")
 def reduce(conn: Connection, info: RunInfo, data):
+    global first_time
+
     num_vars = conn.read_u64()
     levels = [-1] * num_vars
     vals = [-1] * num_vars
@@ -52,10 +59,13 @@ def reduce(conn: Connection, info: RunInfo, data):
         vals=vals,
         clauses=clauses,
         reducible_ids=reducible_ids,
+        conflicts=conflicts,
     )
 
-    # with open("archives/example-problem.pkl", "wb") as f:
-    #     pickle.dump(problem, f)
+    if first_time:
+        with open("archives/example-problem.pkl", "wb") as f:
+            pickle.dump(problem, f)
+        first_time = False
 
     # print(num_vars, levels, vals, clauses, num_reducible, num_target, reducible_ids)
     print(num_vars)

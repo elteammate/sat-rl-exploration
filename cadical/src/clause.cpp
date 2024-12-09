@@ -119,6 +119,10 @@ Clause *Internal::new_clause (bool red, int glue) {
   c->size = size;
   c->pos = 2;
 
+  c->activity = 0.0;
+  c->conflicts_on_creation = stats.conflicts;
+  c->times_reason = 0;
+
   for (int i = 0; i < size; i++)
     c->literals[i] = clause[i];
 

@@ -110,6 +110,10 @@ struct Clause {
   // virtual sizes and the compiler can somehow figure that out, because
   // that would in turn produce a warning.
 
+  float conflicts_on_creation;
+  int times_reason;
+  float activity;
+
 #ifndef NFLEXIBLE
   int literals[];
 #else

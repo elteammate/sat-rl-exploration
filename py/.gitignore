@@ -1,2 +1,5 @@
 __pycache__/
 example.html
+memory.pickle
+runs/
+

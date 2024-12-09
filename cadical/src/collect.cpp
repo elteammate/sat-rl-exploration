@@ -115,6 +115,7 @@ void Internal::protect_reasons () {
     LOG (reason, "protecting assigned %d reason %p", lit, (void *) reason);
     assert (!reason->reason);
     reason->reason = true;
+    reason->times_reason++;
 #ifdef LOGGING
     count++;
 #endif
