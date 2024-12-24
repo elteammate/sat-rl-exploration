@@ -3,6 +3,7 @@ from torch_geometric.data import Data
 import torch_geometric.nn as gnn
 import torch
 import torch.nn as nn
+from torch.utils.tensorboard import SummaryWriter
 import torch_geometric
 import networkx as nx
 import pyvis
@@ -16,16 +17,34 @@ from typing import Protocol, cast
 import enum
 import dataclasses
 import pickle
-import asyncio
 import random
 import json
+import uuid
 import logging
 #%%
 logger = logging.getLogger("notebook")
 logger.setLevel(logging.DEBUG)
 logging.basicConfig(level=logging.DEBUG)
 np.seterr(all='raise')
-torch.autograd.set_detect_anomaly(True)
+DEV = "cuda"
+torch.set_float32_matmul_precision("medium")
+
+writer = SummaryWriter()
+
+@dataclasses.dataclass
+class Counters:
+    episodes: int = 0 
+    epochs: int = 0
+    runs: int = 0
+    steps: int = 0
+    batches: int = 0
+    train_steps: int = 0
+
+    def from_dict(self, d):
+        for k, v in d.items():
+            setattr(self, k, v)
+
+COUNTERS = Counters()
 #%%
 from primitives import Clause
 
@@ -55,6 +74,7 @@ class ReductionProblem:
     vals: list[int]
     clauses: list[Clause]
     reducible_ids: list[int]
+    conflicts: int
 #%%
 def problem_to_cnf_graph(problem: ReductionProblem) -> tuple[CnfGraph, DimInfo]:
     logger.info("Converting problem to CNF graph")
@@ -100,6 +120,16 @@ def problem_to_cnf_graph(problem: ReductionProblem) -> tuple[CnfGraph, DimInfo]:
     g_inv_horn_ratio = c_inv_horn.mean()
     g_size_spread = g_max_clause_size - g_min_clause_size
     g_pos_neg_ratio_spread = g_max_pos_neg_ratio - g_min_pos_neg_ratio
+    c_conflicts_on_creation = np.array([clause.conflicts_on_creation for clause in clauses])
+    c_time = c_conflicts_on_creation / problem.conflicts
+    c_activity = np.array([clause.activity for clause in clauses], dtype=np.float32)
+    c_activity /= max(c_activity.max(), 1.0)
+    c_activity_top10 = c_activity > np.percentile(c_activity, 90)
+    c_time_top10 = c_time > np.percentile(c_time, 90)
+    c_times_reason = np.array([clause.times_reason for clause in clauses], dtype=np.float32)
+    c_times_reason /= max(c_times_reason.max(), 1.0)
+    c_times_reason_top10 = c_times_reason > np.percentile(c_times_reason, 90)
+
 
     v_pos = np.zeros(num_vars)
     v_neg = np.zeros(num_vars)
@@ -119,9 +149,10 @@ def problem_to_cnf_graph(problem: ReductionProblem) -> tuple[CnfGraph, DimInfo]:
                 v_invhorn[v] += 1
 
     v_count = v_pos + v_neg
-    v_pos_neg_ratios = v_pos / np.maximum(v_count, 1)
-    v_horn_ratio = v_horn / np.maximum(v_count, 1)
-    v_invhorn_ratio = v_invhorn / np.maximum(v_count, 1)
+    v_count_non_zero = np.maximum(v_count, 1)
+    v_pos_neg_ratios = v_pos / v_count_non_zero
+    v_horn_ratio = v_horn / v_count_non_zero
+    v_invhorn_ratio = v_invhorn / v_count_non_zero
     g_var_horn_min = v_horn.min()
     g_var_horn_max = v_horn.max()
     g_var_horn_mean = v_horn.mean()
@@ -166,6 +197,12 @@ def problem_to_cnf_graph(problem: ReductionProblem) -> tuple[CnfGraph, DimInfo]:
         c_inv_horn,
         c_clause_redundant,
         c_clause_keep,
+        c_time,
+        c_time_top10,
+        c_activity,
+        c_activity_top10,
+        c_times_reason,
+        c_times_reason_top10,
     ]
 
     var_features = [
@@ -239,6 +276,7 @@ minimal_example_data, DIM_INFO = problem_to_cnf_graph(ReductionProblem(
         Clause(8, [-1, 2], 0, False, False, False),
     ],
     [5, 8],
+    3,
 ))
 
 print(DIM_INFO)
@@ -266,12 +304,12 @@ class CnfProcessingBlock(torch.nn.Module):
         self.disambiguate_clauses = disambiguate_clauses
 
         if disambiguate_clauses:
-            self.conv_redundant = gnn.GATv2Conv(in_channels, out_channels, edge_dim=edge_dim, residual=True)
-            self.conv_irredundant = gnn.GATv2Conv(in_channels, out_channels, edge_dim=edge_dim, residual=True)
+            self.conv_redundant = gnn.GATConv(in_channels, out_channels, edge_dim=edge_dim, residual=True)
+            self.conv_irredundant = gnn.GATConv(in_channels, out_channels, edge_dim=edge_dim, residual=True)
         else:
-            self.conv_clauses = gnn.GATv2Conv(in_channels, out_channels, edge_dim=edge_dim, residual=True)
+            self.conv_clauses = gnn.GATConv(in_channels, out_channels, edge_dim=edge_dim, residual=True)
 
-        self.conv_variables = gnn.GATv2Conv(in_channels, out_channels, edge_dim=edge_dim, residual=True)
+        self.conv_variables = gnn.GATConv(in_channels, out_channels, edge_dim=edge_dim, residual=True)
 
         self.activation = nn.ReLU(inplace=True)
 
@@ -347,6 +385,78 @@ for _ in range(100):
     print(x.sum(axis=1))
 """
 #%%
+class ExpectedValueNormalizationLogits(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, logits: torch.Tensor, ex: torch.Tensor):
+        ex = torch.as_tensor(ex)
+
+        b = torch.zeros(logits.shape[:-1], device=logits.device)
+
+        for _ in range(100):
+            normalized = torch.sigmoid(logits + b.unsqueeze(-1))
+            f_gamma = normalized.sum(dim=-1) - ex
+            f_prime_gamma = (normalized * (1 - normalized)).sum(dim=-1)
+            diff = torch.clamp(f_gamma / f_prime_gamma, -2, 2)
+            if torch.all(diff.abs() < 1e-6):
+                break
+            b = b - diff
+
+        normalized = torch.sigmoid(logits + b.unsqueeze(-1))
+        ctx.save_for_backward(normalized)
+        return normalized
+
+    @staticmethod
+    def backward(ctx, g):
+        normalized, = ctx.saved_tensors
+        p_grad = normalized * (1 - normalized)
+        denom = p_grad.sum(dim=-1)
+        coordwise = p_grad * g
+
+        grad = coordwise - p_grad * coordwise.sum(axis=-1).unsqueeze(-1) / denom.unsqueeze(-1)
+
+        return grad, None
+
+
+probs = torch.tensor([
+    [0.999, 0.5, 0.5, 0.5, 0.1],
+    [0.3, 0.5, 0.5, 0.8, 0.2],
+], requires_grad=True)
+x = -(1 / probs - 1).log()
+y = ExpectedValueNormalizationLogits.apply(x, torch.tensor([2.0, 1.0]))
+# print(x, y, y.sum(axis=-1), sep="\n")
+y.sum().backward()
+# print(probs.grad)
+
+optim = torch.optim.SGD([probs], lr=0.1)
+for _ in range(100):
+    optim.zero_grad()
+    x = -(1 / probs - 1).log()
+    y = ExpectedValueNormalizationLogits.apply(x, torch.tensor([2.0, 1.0]))
+    loss = y.pow(3.0).sum()
+    loss.backward()
+    optim.step()
+    # print(probs)
+#%%
+@dataclasses.dataclass
+class Hyperparameters:
+    batch_size: int = 64
+    runs_per_episode: int = 64
+    epochs: int = 10
+    learning_rate: float = 1e-5
+    eps_clip: float = 0.2
+    entropy_coef: float = 0.01
+    weight_decay: float = 1e-3
+    value_weight: float = 0.5
+    policy_weight: float = 1.0
+    gae_gamma: float = 0.95
+    gae_lambda: float = 0.8
+    penalty_per_conflict: float = 5e-5
+    temperature: float = 4.0
+
+
+HP = Hyperparameters()
+
+#%%
 class CnfGraphModel(nn.Module):
     def __init__(
         self,
@@ -377,9 +487,9 @@ class CnfGraphModel(nn.Module):
             for i in range(len(hidden_dims) - 1)
         ])
 
-        self.output_fc = nn.Linear(hidden_dims[-1], 1)
+        self.output_fc = nn.Linear(hidden_dims[-1], 1, bias=False)
 
-        self.value_fc_clauses = nn.Linear(hidden_dims[-1], 1)
+        self.value_fc_clauses = nn.Linear(hidden_dims[-1], 1, bias=False)
         self.value_fc_variables = nn.Linear(hidden_dims[-1], 1)
 
     def forward(self, cnf_graph: CnfGraph, ex: torch.Tensor | float):
@@ -393,34 +503,34 @@ class CnfGraphModel(nn.Module):
             cnf_graph.global_data.expand(num_variables, -1),
             cnf_graph.x[:num_variables, :self.input_variable_dim],
         ], dim=-1)
-        assert not torch.isnan(variable_input).any()
 
         variable_embedding = self.silu(self.variable_fc(variable_input))
-        assert not torch.isnan(variable_embedding).any()
 
         clause_input = torch.cat([
             cnf_graph.global_data.expand(num_vertices - num_variables, -1),
             cnf_graph.x[num_variables:, :self.input_clause_dim],
         ], dim=-1)
-        assert not torch.isnan(clause_input).any()
 
         clause_embedding = self.silu(self.clause_fc(clause_input))
-        assert not torch.isnan(clause_embedding).any()
 
         x = torch.cat([variable_embedding, clause_embedding], dim=0)
 
         for block in self.processing_blocks:
             x = block(x, cnf_graph)
-            assert not torch.isnan(x).any()
 
         logits = self.output_fc(x[cnf_graph.node_type == NodeType.REDUNDANT.value]).view(-1)
-        logits = (logits - logits.mean()) / logits.std()
-        assert not torch.isnan(logits).any()
-        denorm_probs = torch.sigmoid(logits)
-        assert not torch.isnan(denorm_probs).any()
-        probs = ExpectedValueNormalization.apply(denorm_probs, ex)
+        # logits = (logits - logits.mean()) / logits.std()
+        # assert not torch.isnan(logits).any()
+        # denorm_probs = torch.sigmoid(logits)
+        # assert not torch.isnan(denorm_probs).any()
+        # probs = ExpectedValueNormalization.apply(denorm_probs, ex)
+        # if torch.isnan(probs).any():
+        #     print(denorm_probs)
+        #     print(probs)
+        #     raise AssertionError()
+        probs = ExpectedValueNormalizationLogits.apply(logits * HP.temperature, ex)
         if torch.isnan(probs).any():
-            print(denorm_probs)
+            print(logits)
             print(probs)
             raise AssertionError()
 
@@ -441,26 +551,6 @@ testing_model = CnfGraphModel(
 )
 
 testing_model(minimal_example_data, 0.75)
-#%%
-DEV = "cpu"
-torch.set_float32_matmul_precision("medium")
-#%%
-@dataclasses.dataclass
-class Hyperparameters:
-    batch_size: int = 64
-    learning_rate: float = 3e-4
-    epochs: int = 4
-    eps_clip: float = 0.2
-    entropy_coef: float = 0.01
-    value_weight: float = 0.5
-    policy_weight: float = 1.0
-    gae_gamma: float = 0.99
-    gae_lambda: float = 0.95
-    penalty_per_conflict: float = 5e-4
-
-
-HP = Hyperparameters()
-
 #%%
 def compute_returns_advantages(rewards: list[float], values: list[float]) -> tuple[list[float], list[float]]:
     returns = []
@@ -550,9 +640,14 @@ class EpisodeResult:
 class Agent:
     def __init__(self, model):
         self.model = model.to(DEV)
-        self.optim = torch.optim.Adam(self.model.parameters(), lr=HP.learning_rate)
+        self.optim = torch.optim.AdamW(
+            self.model.parameters(),
+            lr=HP.learning_rate,
+            weight_decay=HP.weight_decay
+        )
 
     def act(self, cnf_graph: CnfGraph, ex: float):
+        COUNTERS.steps += 1
         logger.info("Running agent act")
         with torch.no_grad():
             cnf_graph = cnf_graph.to(DEV)
@@ -563,34 +658,42 @@ class Agent:
             logger.info("Finished agent act")
             return torch.distributions.Bernoulli(probs), value.item()
 
-    def update(self, results: EpisodeResult):
+    def update(self, results: EpisodeResult, silent: bool = False):
         logger.info("Training agent")
-        assert all(a.dtype == torch.bool for a in results.actions)
         r = results
 
         n = len(r.states)
         batch_size = HP.batch_size
+        advantages = torch.tensor(r.advantages, dtype=torch.float32)
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
         for num_epoch in range(HP.epochs):
+            COUNTERS.epochs += 1
             logger.info("Training agent, epoch %d", num_epoch)
             indices = random.sample(range(n), n)
             for batch_start in range(0, n, batch_size):
+                COUNTERS.batches += 1
                 idx = indices[batch_start:batch_start + batch_size]
 
                 self.optim.zero_grad()
                 for i in idx:
+                    COUNTERS.train_steps += 1
                     graph, ex = r.states[i]
                     new_probs, value = self.model(graph, ex)
                     value = value.cpu()
                     dist = torch.distributions.Bernoulli(probs=new_probs)
                     log_probs = dist.log_prob(r.actions[i].float())
-                    entropy = dist.entropy().sum()
+                    entropy = dist.entropy().mean()
 
                     ratio = torch.exp(log_probs - r.dists[i].log_prob(r.actions[i].float()))
-                    surr1 = ratio * r.advantages[i]
-                    surr2 = torch.clamp(ratio, 1.0 - HP.eps_clip, 1.0 + HP.eps_clip) * r.advantages[i]
+                    surr1 = ratio * advantages[i]
+                    surr2 = torch.clamp(ratio, 1.0 - HP.eps_clip, 1.0 + HP.eps_clip) * advantages[i]
 
-                    value_loss = torch.nn.functional.mse_loss(value, torch.tensor(r.rewards[i] + r.values[i]))
+                    value_loss = torch.nn.functional.huber_loss(value, torch.tensor(r.returns[i]))
                     policy_loss = -torch.min(surr1, surr2).mean()
+
+                    if not silent:
+                        writer.add_scalar("value loss", value_loss.item(), COUNTERS.train_steps)
 
                     loss = (
                         HP.policy_weight * policy_loss
@@ -635,7 +738,7 @@ results = EpisodeResult(
     [],
 )
 
-testing_agent.update(results)
+testing_agent.update(results, silent=True)
 
 #%%
 @dataclasses.dataclass
@@ -656,7 +759,7 @@ with open("../archives/runs.json", "r") as f:
     ) for run in runs]
 
 
-def get_random_instance(unsat_only: bool = True):
+def get_random_instance(unsat_only: bool = True) -> CnfProblemInstance:
     while True:
         run = random.choice(runs)
         if not unsat_only or not run.result:
@@ -671,7 +774,8 @@ class CadicalEnv:
         self.cadical_path = cadical_path
         self.runs_per_episode = runs_per_episode
 
-    def run_instance(self, agent: Agent, instance_path: Path) -> EpisodeResult:
+    def run_instance(self, agent: Agent, instance: CnfProblemInstance) -> EpisodeResult:
+        COUNTERS.runs += 1
         result = EpisodeResult.empty()
         router = srunner.Router()
 
@@ -709,6 +813,7 @@ class CadicalEnv:
                 vals=vals,
                 clauses=clauses,
                 reducible_ids=reducible_ids,
+                conflicts=conflicts,
             )
 
             logger.debug("Finished reading reduction data")
@@ -762,24 +867,34 @@ class CadicalEnv:
                 else:
                     stats[name] = conn.read_u64()
             conn.write_ok()
+
+            for name, value in stats.items():
+                writer.add_scalar(f"Runs/{name}", value, COUNTERS.runs)
+                if instance.stats[name]:
+                    writer.add_scalar(f"Runs relative/{name}", value / instance.stats[name], COUNTERS.runs)
+
+            writer.add_scalar(f"run_conflicts", stats["conflicts"], COUNTERS.runs)
+            writer.add_scalar(f"relative_lbd_conflicts", stats["conflicts"] / instance.stats["conflicts"], COUNTERS.runs)
+            writer.add_scalar(f"relative_random_conflicts", stats["conflicts"] / instance.stats_no_reductions["conflicts"], COUNTERS.runs)
+
             result.add_reward(-(stats["conflicts"] - last_conflicts) * HP.penalty_per_conflict)
             result.complete(stats)
 
         srunner.run_instance(
             self.cadical_path,
             ["--reduce-mode", "2"],
-            instance_path,
+            instance.path,
             router.routes,
-            silent=False,
+            silent=True,
         )
-        
+
         return result
 
     def run_episode(self, agent: Agent) -> EpisodeResult:
         results = []
         for _ in range(self.runs_per_episode):
             instance = get_random_instance()
-            results.append(self.run_instance(agent, instance.path))
+            results.append(self.run_instance(agent, instance))
 
         return EpisodeResult.merge_all(results)
 
@@ -799,15 +914,42 @@ agent = Agent(model)
 
 env = CadicalEnv(
     Path("../cadical/build/cadical"),
-    runs_per_episode=16,
+    runs_per_episode=HP.runs_per_episode,
 )
+#%%
+CHECKPOINT_ROOT = Path("../checkpoints")
+CHECKPOINT_ROOT.mkdir(exist_ok=True, parents=True)
+saved_checkpoints = list(CHECKPOINT_ROOT.glob("*.pt"))
+saved_checkpoints.sort(key=lambda p: p.stat().st_mtime)
 
-for episode in range(100):
-    print(f"Episode {episode}: ", end="")
+if len(saved_checkpoints) > 0:
+    checkpoint = torch.load(saved_checkpoints[-1])
+    agent.model.load_state_dict(checkpoint["model"])
+    agent.optim.load_state_dict(checkpoint["optim"])
+    COUNTERS.from_dict(checkpoint["counters"])
+#%%
+# torch.cuda.memory._record_memory_history(max_entries=10 ** 7)
+#%%
+while True:
+    COUNTERS.episodes += 1
+    print(f"Episode {COUNTERS.episodes}")
+    writer.add_scalar("episode", COUNTERS.episodes, COUNTERS.episodes)
     results = env.run_episode(agent)
+    logger.info("Finished episode, starting training")
     agent.update(results)
+
+    torch.save({
+        "model": agent.model.state_dict(),
+        "optim": agent.optim.state_dict(),
+        "counters": dataclasses.asdict(COUNTERS),
+    }, f"../checkpoints/agent-{COUNTERS.episodes}-{uuid.uuid4()}.pt")
+
+    writer.add_scalar("episode_reward", sum(results.rewards), COUNTERS.episodes)
     print(f"Rewards: {sum(results.rewards)}")
+    del results
 
 #%%
+torch.cuda.memory._dump_snapshot(f"memory.pickle")
 
-#%%
+# Stop recording memory snapshot history.
+torch.cuda.memory._record_memory_history(enabled=None)
